@@ -176,9 +176,10 @@ def check_wake_phrase(audio_data, sample_rate, model_name):
             return
 
         # 检查是否匹配唤醒词（模糊匹配）
-        text_lower = text.lower().replace(" ", "")
+        text_lower = text.lower().replace(" ", "").replace("\u3000", "")
         for phrase in WAKE_PHRASES:
-            if phrase in text_lower or text_lower in phrase:
+            phrase_norm = phrase.lower().replace(" ", "").replace("\u3000", "")
+            if phrase_norm in text_lower or text_lower in phrase_norm:
                 log(f"{C_GREEN}[WAKE] 唤醒词匹配: {phrase}{C_RESET}")
                 send_wake_signal(phrase)
                 notify_qclaw()

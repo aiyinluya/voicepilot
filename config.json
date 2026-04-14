@@ -14,56 +14,192 @@
     "compute_type": "int8"
   },
   "apps": {
-    "cursor":  { "process": "Cursor.exe",  "title": "Cursor" },
-    "claude":  { "process": "WindowsTerminal.exe", "title": "Windows Terminal" },
-    "browser": { "process": "msedge.exe",          "title": "Edge" },
-    "code":    { "process": "Code.exe",            "title": "VS Code" }
+    "cursor": {
+      "process": "Cursor.exe",
+      "title": "Cursor"
+    },
+    "claude": {
+      "process": "WindowsTerminal.exe",
+      "title": "Windows Terminal"
+    },
+    "browser": {
+      "process": "msedge.exe",
+      "title": "Edge"
+    },
+    "code": {
+      "process": "Code.exe",
+      "title": "VS Code"
+    }
   },
   "commands": {
-    "新标签":       { "action": "keys",   "keys": "^t" },
-    "关标签":       { "action": "keys",   "keys": "^w" },
-    "关闭":         { "action": "keys",   "keys": "^w" },
-    "下一个":       { "action": "keys",   "keys": "^{Tab}" },
-    "右边":         { "action": "keys",   "keys": "^{Tab}" },
-    "上一个":       { "action": "keys",   "keys": "^+{Tab}" },
-    "左边":         { "action": "keys",   "keys": "^+{Tab}" },
-    "第一个":       { "action": "keys",   "keys": "^1" },
-    "第二个":       { "action": "keys",   "keys": "^2" },
-    "第三个":       { "action": "keys",   "keys": "^3" },
-    "第四个":       { "action": "keys",   "keys": "^4" },
-    "第五个":       { "action": "keys",   "keys": "^5" },
-    "往下":         { "action": "keys",   "keys": "{PgDn}" },
-    "向下":         { "action": "keys",   "keys": "{PgDn}" },
-    "往上":         { "action": "keys",   "keys": "{PgUp}" },
-    "向上":         { "action": "keys",   "keys": "{PgUp}" },
-    "保存":         { "action": "keys",   "keys": "^s" },
-    "撤销":         { "action": "keys",   "keys": "^z" },
-    "重做":         { "action": "keys",   "keys": "^y" },
-    "全选":         { "action": "keys",   "keys": "^a" },
-    "复制":         { "action": "keys",   "keys": "^c" },
-    "粘贴":         { "action": "keys",   "keys": "^v" },
-    "查找":         { "action": "keys",   "keys": "^f" },
-    "替换":         { "action": "keys",   "keys": "^h" },
-    "回车":         { "action": "keys",   "keys": "{Enter}" },
-    "确定":         { "action": "keys",   "keys": "{Enter}" },
-    "取消":         { "action": "keys",   "keys": "{Escape}" },
-    "大纲":         { "action": "keys",   "keys": "^+o" },
-    "总览":         { "action": "keys",   "keys": "^+o" },
-    "切终端":       { "action": "keys",   "keys": "^`" },
-    "回编辑器":     { "action": "keys",   "keys": "^1" },
-    "切到cursor":   { "action": "app",    "app": "cursor" },
-    "去cursor":     { "action": "app",    "app": "cursor" },
-    "切cursor":     { "action": "app",    "app": "cursor" },
-    "切到claude":   { "action": "app",    "app": "claude" },
-    "去claude":     { "action": "app",    "app": "claude" },
-    "切claude":     { "action": "app",    "app": "claude" },
-    "切到浏览器":   { "action": "app",    "app": "browser" },
-    "去浏览器":     { "action": "app",    "app": "browser" },
-    "切到浏览器":   { "action": "app",    "app": "browser" }
+    "新标签": {
+      "action": "keys",
+      "keys": "^t"
+    },
+    "关标签": {
+      "action": "keys",
+      "keys": "^w"
+    },
+    "关闭": {
+      "action": "keys",
+      "keys": "^w"
+    },
+    "下一个": {
+      "action": "keys",
+      "keys": "^{Tab}"
+    },
+    "下一个标签": {
+      "action": "keys",
+      "keys": "^{Tab}"
+    },
+    "上一个": {
+      "action": "keys",
+      "keys": "^+{Tab}"
+    },
+    "上一个标签": {
+      "action": "keys",
+      "keys": "^+{Tab}"
+    },
+    "第一个": {
+      "action": "keys",
+      "keys": "^1"
+    },
+    "第二个": {
+      "action": "keys",
+      "keys": "^2"
+    },
+    "第三个": {
+      "action": "keys",
+      "keys": "^3"
+    },
+    "第四个": {
+      "action": "keys",
+      "keys": "^4"
+    },
+    "第五个": {
+      "action": "keys",
+      "keys": "^5"
+    },
+    "往下": {
+      "action": "keys",
+      "keys": "{PgDn}"
+    },
+    "向下": {
+      "action": "keys",
+      "keys": "{PgDn}"
+    },
+    "往上": {
+      "action": "keys",
+      "keys": "{PgUp}"
+    },
+    "向上": {
+      "action": "keys",
+      "keys": "{PgUp}"
+    },
+    "保存": {
+      "action": "keys",
+      "keys": "^s"
+    },
+    "撤销": {
+      "action": "keys",
+      "keys": "^z"
+    },
+    "重做": {
+      "action": "keys",
+      "keys": "^y"
+    },
+    "全选": {
+      "action": "keys",
+      "keys": "^a"
+    },
+    "复制": {
+      "action": "keys",
+      "keys": "^c"
+    },
+    "粘贴": {
+      "action": "keys",
+      "keys": "^v"
+    },
+    "查找": {
+      "action": "keys",
+      "keys": "^f"
+    },
+    "替换": {
+      "action": "keys",
+      "keys": "^h"
+    },
+    "确定": {
+      "action": "keys",
+      "keys": "{Enter}"
+    },
+    "回车": {
+      "action": "keys",
+      "keys": "{Enter}"
+    },
+    "取消": {
+      "action": "keys",
+      "keys": "{Escape}"
+    },
+    "退出": {
+      "action": "keys",
+      "keys": "{Escape}"
+    },
+    "大纲": {
+      "action": "keys",
+      "keys": "^+o"
+    },
+    "总览": {
+      "action": "keys",
+      "keys": "^+o"
+    },
+    "切到cursor": {
+      "action": "app",
+      "app": "cursor"
+    },
+    "去cursor": {
+      "action": "app",
+      "app": "cursor"
+    },
+    "切cursor": {
+      "action": "app",
+      "app": "cursor"
+    },
+    "切到浏览器": {
+      "action": "app",
+      "app": "browser"
+    },
+    "去浏览器": {
+      "action": "app",
+      "app": "browser"
+    },
+    "切浏览器": {
+      "action": "app",
+      "app": "browser"
+    },
+    "切到claude": {
+      "action": "app",
+      "app": "claude"
+    },
+    "去claude": {
+      "action": "app",
+      "app": "claude"
+    },
+    "切claude": {
+      "action": "app",
+      "app": "claude"
+    },
+    "切终端": {
+      "action": "app",
+      "app": "claude"
+    },
+    "回编辑器": {
+      "action": "app",
+      "app": "cursor"
+    }
   },
   "hotwords": {
+    "唤醒": "listen",
     "命令": "command",
-    "指令": "command",
     "模式": "command"
   }
 }
