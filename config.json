@@ -1,0 +1,69 @@
+{
+  "mic": {
+    "device": 1,
+    "sample_rate": 16000,
+    "channels": 1,
+    "silence_threshold": 0.02,
+    "min_phrase_seconds": 0.5,
+    "silence_seconds": 1.5
+  },
+  "whisper": {
+    "model": "tiny",
+    "language": "zh",
+    "device": "cpu",
+    "compute_type": "int8"
+  },
+  "apps": {
+    "cursor":  { "process": "Cursor.exe",  "title": "Cursor" },
+    "claude":  { "process": "WindowsTerminal.exe", "title": "Windows Terminal" },
+    "browser": { "process": "msedge.exe",          "title": "Edge" },
+    "code":    { "process": "Code.exe",            "title": "VS Code" }
+  },
+  "commands": {
+    "新標籤":       { "action": "keys",   "keys": "^t" },
+    "關標籤":       { "action": "keys",   "keys": "^w" },
+    "關閉":         { "action": "keys",   "keys": "^w" },
+    "下一個":       { "action": "keys",   "keys": "^{Tab}" },
+    "右邊":         { "action": "keys",   "keys": "^{Tab}" },
+    "上一個":       { "action": "keys",   "keys": "^+{Tab}" },
+    "左邊":         { "action": "keys",   "keys": "^+{Tab}" },
+    "第一個":       { "action": "keys",   "keys": "^1" },
+    "第二個":       { "action": "keys",   "keys": "^2" },
+    "第三個":       { "action": "keys",   "keys": "^3" },
+    "第四個":       { "action": "keys",   "keys": "^4" },
+    "第五個":       { "action": "keys",   "keys": "^5" },
+    "往下":         { "action": "keys",   "keys": "{PgDn}" },
+    "向下":         { "action": "keys",   "keys": "{PgDn}" },
+    "往上":         { "action": "keys",   "keys": "{PgUp}" },
+    "向上":         { "action": "keys",   "keys": "{PgUp}" },
+    "保存":         { "action": "keys",   "keys": "^s" },
+    "撤銷":         { "action": "keys",   "keys": "^z" },
+    "重做":         { "action": "keys",   "keys": "^y" },
+    "全選":         { "action": "keys",   "keys": "^a" },
+    "複製":         { "action": "keys",   "keys": "^c" },
+    "粘貼":         { "action": "keys",   "keys": "^v" },
+    "查找":         { "action": "keys",   "keys": "^f" },
+    "替換":         { "action": "keys",   "keys": "^h" },
+    "回車":         { "action": "keys",   "keys": "{Enter}" },
+    "確定":         { "action": "keys",   "keys": "{Enter}" },
+    "取消":         { "action": "keys",   "keys": "{Escape}" },
+    "大綱":         { "action": "keys",   "keys": "^+o" },
+    "總覽":         { "action": "keys",   "keys": "^+o" },
+    "切終端":       { "action": "keys",   "keys": "^`" },
+    "回編輯器":     { "action": "keys",   "keys": "^1" },
+    "切到cursor":   { "action": "app",    "app": "cursor" },
+    "去cursor":     { "action": "app",    "app": "cursor" },
+    "切cursor":     { "action": "app",    "app": "cursor" },
+    "切到claude":   { "action": "app",    "app": "claude" },
+    "去claude":     { "action": "app",    "app": "claude" },
+    "切claude":     { "action": "app",    "app": "claude" },
+    "切到瀏覽器":   { "action": "app",    "app": "browser" },
+    "去瀏覽器":     { "action": "app",    "app": "browser" },
+    "切到瀏覽器":   { "action": "app",    "app": "browser" }
+  },
+  "hotwords": {
+    "命令": "command",
+    "指令": "command",
+    "模式": "command"
+  }
+}
