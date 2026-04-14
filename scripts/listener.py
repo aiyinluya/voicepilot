@@ -1,7 +1,7 @@
 """
-listener.py — 語音監聽 + 意圖識別 + 命令執行
+listener.py — 语音监听 + 意图识别 + 命令执行
 ===============================================
-語音輸入 → Whisper 識別 → 指令匹配 → PowerShell/WScript 執行
+语音输入 → Whisper 识别 → 指令匹配 → PowerShell/WScript 执行
 
 用法:
     python listener.py [--config config.json]
@@ -16,27 +16,27 @@ import argparse
 import subprocess
 import numpy as np
 
-# Windows UTF-8 編碼修復
+# Windows UTF-8 编码修复
 if sys.platform == "win32":
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# 音頻
+# 音频
 import sounddevice as sd
 
-# 語音識別
+# 语音识别
 from faster_whisper import WhisperModel
 
 # ============================================================
-# 設定
+# 配置
 # ============================================================
 SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = os.path.join(SKILL_DIR, "config.json")
 HF_MIRROR = "https://hf-mirror.com"
 
 # ============================================================
-# 音色配色（終端顯示）
+# 颜色配置（终端显示）
 # ============================================================
 C_RESET  = "\033[0m"
 C_GREEN  = "\033[92m"
@@ -64,7 +64,7 @@ def log_cmd(cmd, keys=""):
     ts = time.strftime("%H:%M:%S")
     print(f"{C_GRAY}[{ts}]{C_RESET} {C_GREEN}CMD :{C_RESET} {C_BOLD}{cmd}{C_RESET}", end="", flush=True)
     if keys:
-        print(f"  → {C_YELLOW}{keys}{C_RESET}", flush=True)
+        print(f"  -> {C_YELLOW}{keys}{C_RESET}", flush=True)
     else:
         print(flush=True)
 
@@ -77,17 +77,17 @@ def log_err(text):
     print(f"{C_GRAY}[{ts}]{C_RESET} {C_GRAY}ERR :{C_RESET} {C_RESET}{text}{C_RESET}", flush=True)
 
 # ============================================================
-# 配置載入
+# 配置加载
 # ============================================================
 def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 # ============================================================
-# PowerShell 命令執行
+# PowerShell 命令执行
 # ============================================================
 def run_ps(script_path, action, **kwargs):
-    """執行 window.ps1，返回解析後的結果"""
+    """执行 window.ps1，返回解析后的结果"""
     args = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path, "-Action", action]
     for k, v in kwargs.items():
         if v is not None:
@@ -120,11 +120,11 @@ def run_ps(script_path, action, **kwargs):
 # ============================================================
 def activate_app(script_path, app_name, apps_config):
     if app_name not in apps_config:
-        log_err(f"未知應用: {app_name}")
+        log_err(f"未知应用: {app_name}")
         return
 
     app_cfg = apps_config[app_name]
-    log_cmd(f"切換窗口 → {app_name}", app_cfg.get("process", ""))
+    log_cmd(f"切换窗口 -> {app_name}", app_cfg.get("process", ""))
 
     result = run_ps(
         script_path, "activate",
@@ -132,40 +132,40 @@ def activate_app(script_path, app_name, apps_config):
         AppTitle=app_cfg.get("title", "")
     )
     if result.get("success"):
-        log(f"  ✓ 已切換到 {app_name}")
+        log(f"  [+] 已切换到 {app_name}")
     else:
-        log_err(f"  ✗ 切換失敗: {result.get('error', 'unknown')}")
+        log_err(f"  [!] 切换失败: {result.get('error', 'unknown')}")
 
 # ============================================================
-# 快捷鍵發送
+# 快捷键发送
 # ============================================================
 def send_keys(script_path, keys):
-    log_cmd("發送快捷鍵", keys)
+    log_cmd("发送快捷键", keys)
     result = run_ps(script_path, "sendkeys", Keys=keys)
     if result.get("success"):
-        log(f"  ✓ 發送成功")
+        log(f"  [+] 发送成功")
     else:
-        log_err(f"  ✗ 發送失敗: {result.get('error', 'unknown')}")
+        log_err(f"  [!] 发送失败: {result.get('error', 'unknown')}")
 
 # ============================================================
-# 粘貼文字
+# 粘贴文字
 # ============================================================
 def paste_text(script_path, text):
     log_txt(text)
 
     result = run_ps(script_path, "paste", Text=text)
     if result.get("success"):
-        log(f"  ✓ 已粘貼 {result.get('textLength', len(text))} 字符")
+        log(f"  [+] 已粘贴 {result.get('textLength', len(text))} 字符")
     else:
-        log_err(f"  ✗ 粘貼失敗: {result.get('error', 'unknown')}")
+        log_err(f"  [!] 粘贴失败: {result.get('error', 'unknown')}")
 
 # ============================================================
-# 指令解析與執行
+# 指令解析与执行
 # ============================================================
 def parse_and_execute(text, config, script_path):
     """
-    根據配置匹配指令，執行對應動作。
-    返回: True=執行了指令, False=未匹配（進入粘貼模式）
+    根据配置匹配指令，执行对应动作。
+    返回: True=执行了指令, False=未匹配（进入粘贴模式）
     """
     text = text.strip()
     if not text:
@@ -174,7 +174,7 @@ def parse_and_execute(text, config, script_path):
     commands = config.get("commands", {})
     hotwords = config.get("hotwords", {})
 
-    # 精確匹配
+    # 精确匹配
     if text in commands:
         cmd = commands[text]
         action = cmd.get("action")
@@ -185,7 +185,7 @@ def parse_and_execute(text, config, script_path):
             activate_app(script_path, cmd["app"], config.get("apps", {}))
             return True
 
-    # 前綴匹配（支持「切到 Cursor」「去 Cursor」等）
+    # 前缀匹配（支持"切到 Cursor""去 Cursor"等）
     for key, cmd in commands.items():
         if text.startswith(key) or text.endswith(key):
             action = cmd.get("action")
@@ -196,7 +196,7 @@ def parse_and_execute(text, config, script_path):
                 activate_app(script_path, cmd["app"], config.get("apps", {}))
                 return True
 
-    # 部分匹配（關鍵詞包含）
+    # 部分匹配（关键词包含）
     for key, cmd in commands.items():
         if key in text:
             action = cmd.get("action")
@@ -210,28 +210,28 @@ def parse_and_execute(text, config, script_path):
     return False
 
 # ============================================================
-# 音頻錄製：持續監聽，停頓時識別
+# 音频录制：持续监听，停顿时识别
 # ============================================================
 def listen_loop(config, model, script_path):
-    mic_cfg    = config["mic"]
-    sample_rate = mic_cfg["sample_rate"]
-    channels   = mic_cfg["channels"]
-    device     = mic_cfg["device"]
+    mic_cfg     = config["mic"]
+    sample_rate  = mic_cfg["sample_rate"]
+    channels    = mic_cfg["channels"]
+    device      = mic_cfg["device"]
     silence_thr = mic_cfg.get("silence_threshold", 0.01)
-    min_phrase = mic_cfg.get("min_phrase_seconds", 0.5)
+    min_phrase  = mic_cfg.get("min_phrase_seconds", 0.5)
     silence_dur = mic_cfg.get("silence_seconds", 1.5)
 
-    # 緩衝配置
-    buf_samples = int(sample_rate * 0.1)  # 每塊 100ms
+    # 缓冲配置
+    buf_samples     = int(sample_rate * 0.1)  # 每块 100ms
     silence_samples = int(sample_rate * silence_dur)
 
-    log(f"{C_BOLD}🎤 開始監聽{C_RESET}", color=C_GREEN)
-    log(f"  模型: {config['whisper']['model']} | 設備: {device} | 停頓閾值: {silence_thr}")
-    log(f"  說指令詞直接執行，說普通內容粘貼到當前窗口")
-    log(f"  按 Ctrl+C 停止監聽")
+    log(f"{C_BOLD}[MIC] 开始监听{C_RESET}", color=C_GREEN)
+    log(f"  模型: {config['whisper']['model']} | 设备: {device} | 停顿阈值: {silence_thr}")
+    log(f"  说指令词直接执行，说普通内容粘贴到当前窗口")
+    log(f"  按 Ctrl+C 停止监听")
     log("-" * 50)
 
-    ring_buf = np.array([], dtype=np.float32)  # 語音緩衝
+    ring_buf = np.array([], dtype=np.float32)  # 语音缓冲
     silence_count = 0
     is_speaking = False
     phrase_started = False
@@ -245,14 +245,14 @@ def listen_loop(config, model, script_path):
         chunk = indata[:, 0].astype(np.float32)
         rms = np.sqrt(np.mean(chunk ** 2))
 
-        # 顯示音頻級別（每秒最多一次）
+        # 显示音频级别（每秒最多一次）
         if rms > silence_thr * 1.5:
-            bar = "█" * int(min(rms * 50, 20))
+            bar = "=" * int(min(rms * 50, 20))
             ts = time.strftime("%H:%M:%S")
-            print(f"{C_GRAY}[{ts}]{C_RESET} 🔊 {bar} {rms:.3f}", flush=True)
+            print(f"{C_GRAY}[{ts}]{C_RESET} MIC {bar} {rms:.3f}", flush=True)
 
         if rms > silence_thr:
-            # 有聲音
+            # 有声音
             ring_buf = np.concatenate([ring_buf, chunk])
             silence_count = 0
             if not phrase_started:
@@ -260,21 +260,21 @@ def listen_loop(config, model, script_path):
                 phrase_start_time = time.time()
             is_speaking = True
         else:
-            # 停頓
+            # 停顿
             if is_speaking:
                 silence_count += frames
-                # 停頓超過閾值，認為一句話結束
+                # 停顿超过阈值，认为一句话结束
                 if silence_count >= silence_samples / (frames / sample_rate):
                     is_speaking = False
                     duration = time.time() - (phrase_start_time or time.time())
                     if duration >= min_phrase and len(ring_buf) > 0:
-                        # 複製音頻避免引用問題
+                        # 复制音频避免引用问题
                         audio_copy = ring_buf.copy()
-                        # 觸發識別（異步更好，這裡同步以便控制線程）
+                        # 触发识别（异步更好，这里同步以便控制线程）
                         try:
                             transcribe_and_execute(audio_copy, model, config, script_path)
                         except Exception as e:
-                            log_err(f"識別錯誤: {e}")
+                            log_err(f"识别错误: {e}")
                     # 重置
                     ring_buf = np.array([], dtype=np.float32)
                     silence_count = 0
@@ -282,7 +282,7 @@ def listen_loop(config, model, script_path):
             else:
                 silence_count = 0
 
-    # 錄製流
+    # 录制流
     stream = sd.InputStream(
         samplerate=sample_rate,
         channels=channels,
@@ -294,15 +294,15 @@ def listen_loop(config, model, script_path):
 
     with stream:
         while True:
-            time.sleep(0.5)  # 主線程保持活躍
+            time.sleep(0.5)  # 主线程保持活跃
 
 # ============================================================
-# 轉錄 + 執行
+# 转录 + 执行
 # ============================================================
 def transcribe_and_execute(audio_data, model, config, script_path):
-    """在獨立線程中運行 Whisper 識別，然後執行"""
-    # 重新採樣為 16000Hz（如需要）
-    # faster-whisper 內部處理
+    """在独立线程中运行 Whisper 识别，然后执行"""
+    # 重新采样为 16000Hz（如需要）
+    # faster-whisper 内部处理
 
     segments, _ = model.transcribe(
         audio_data,
@@ -317,52 +317,52 @@ def transcribe_and_execute(audio_data, model, config, script_path):
         return
 
     ts = time.strftime("%H:%M:%S")
-    print(f"{C_GRAY}[{ts}]{C_RESET} {C_BOLD}👂 聽到:{C_RESET} {C_YELLOW}{text}{C_RESET}", flush=True)
+    print(f"{C_GRAY}[{ts}]{C_RESET} {C_BOLD}>>> 听到:{C_RESET} {C_YELLOW}{text}{C_RESET}", flush=True)
 
-    # 嘗試匹配指令
+    # 尝试匹配指令
     matched = parse_and_execute(text, config, script_path)
 
     if not matched:
-        # 未匹配指令 → 粘貼文字到當前窗口
+        # 未匹配指令 -> 粘贴文字到当前窗口
         paste_text(script_path, text)
 
 # ============================================================
 # 主入口
 # ============================================================
 def main():
-    parser = argparse.ArgumentParser(description="VoiceDev — 語音驅動開發助理")
+    parser = argparse.ArgumentParser(description="VoiceDev - 语音驱动开发助理")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     args = parser.parse_args()
 
-    # 確保 HF 鏡像可用
+    # 确保 HF 镜像可用
     os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
 
-    # 載入配置
+    # 加载配置
     if not os.path.exists(args.config):
-        print(f"錯誤: 配置文件不存在: {args.config}", file=sys.stderr)
+        print(f"错误: 配置文件不存在: {args.config}", file=sys.stderr)
         sys.exit(1)
 
     config = load_config(args.config)
     script_path = os.path.join(SKILL_DIR, "window.ps1")
 
-    # 載入 Whisper 模型
+    # 加载 Whisper 模型
     wcfg = config.get("whisper", {})
-    model_name = wcfg.get("model", "tiny")
-    device = wcfg.get("device", "cpu")
+    model_name  = wcfg.get("model", "tiny")
+    device      = wcfg.get("device", "cpu")
     compute_type = wcfg.get("compute_type", "int8")
 
-    log(f"{C_BOLD}🚀 加載 Whisper 模型 ({model_name})…{C_RESET}", color=C_GRAY)
+    log(f"{C_BOLD}[LOAD] 加载 Whisper 模型 ({model_name})...{C_RESET}", color=C_GRAY)
 
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
     except Exception as e:
-        log_err(f"模型加載失敗: {e}")
-        log("提示: 首次運行需下載模型，請確保網絡暢通，或手動設置 HF_ENDPOINT 鏡像")
+        log_err(f"模型加载失败: {e}")
+        log("提示: 首次运行需下载模型，请确保网络畅通，或手动设置 HF_ENDPOINT 镜像")
         sys.exit(1)
 
-    log(f"{C_GREEN}✓ 模型就緒{C_RESET}")
+    log(f"{C_GREEN}[+] 模型就绪{C_RESET}")
 
-    # 測試麥克風
+    # 测试麦克风
     mic_cfg = config.get("mic", {})
     dev_id = mic_cfg.get("device", None)
 
@@ -370,24 +370,24 @@ def main():
         devices = sd.query_devices()
         if dev_id is None:
             dev_id = sd.query_devices(kind="input")["index"]
-        log(f"使用麥克風設備 {dev_id}: {sd.query_devices(dev_id)['name']}")
+        log(f"使用麦克风设备 {dev_id}: {sd.query_devices(dev_id)['name']}")
     except Exception as e:
-        log_err(f"麥克風初始化失敗: {e}")
+        log_err(f"麦克风初始化失败: {e}")
         sys.exit(1)
 
-    # Ctrl+C 優雅退出
+    # Ctrl+C 优雅退出
     def signal_handler(sig, frame):
-        print(f"\n{C_GRAY}[*] 監聽已停止{C_RESET}")
+        print(f"\n{C_GRAY}[*] 监听已停止{C_RESET}")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # 開始監聽
+    # 开始监听
     try:
         listen_loop(config, model, script_path)
     except KeyboardInterrupt:
-        print(f"\n{C_GRAY}[*] 監聽已停止{C_RESET}")
+        print(f"\n{C_GRAY}[*] 监听已停止{C_RESET}")
 
 if __name__ == "__main__":
     main()
