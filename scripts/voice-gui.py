@@ -174,7 +174,7 @@ class VoicePilotApp(ctk.CTk):
         self.audio_q      = queue.Queue(maxsize=20)
 
         self.title("VoicePilot 语音开发助理")
-        self.geometry("960x720")
+        self.geometry("1100x740")
         self.resizable(False, False)
         self.configure(fg_color=C_BG)
 
@@ -216,8 +216,8 @@ class VoicePilotApp(ctk.CTk):
         # === 主区 ===
         main = ctk.CTkFrame(self, fg_color=C_BG)
         main.pack(fill="both", expand=True, padx=16, pady=(8, 16))
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=2)
+        main.columnconfigure(0, weight=4)
+        main.columnconfigure(1, weight=3)
 
         # -- 左列 --
         left = ctk.CTkFrame(main, fg_color="transparent")
