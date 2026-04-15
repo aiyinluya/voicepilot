@@ -44,7 +44,8 @@ def send_keys(key_str):
         r = subprocess.run(
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
              "-Action", "keys", "-Keys", key_str],
-            capture_output=True, timeout=10
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         return r.returncode == 0
     except Exception:
@@ -56,7 +57,8 @@ def activate_app(app_name):
         r = subprocess.run(
             ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
              "-Action", "activate", "-app", app_name],
-            capture_output=True, timeout=10
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         return r.returncode == 0
     except Exception:
@@ -257,12 +259,38 @@ class VoicePilotApp(ctk.CTk):
         # 识别结果
         rc = cframe(left)
         rc.pack(fill="x", pady=(0, 8))
-        clabel(rc, "🗣  识别内容", size=12, color=C_DIM,
+        clabel(rc, "[CLIP] 识别内容", size=12, color=C_DIM,
                anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
-        self.recog_lb = clabel(rc, "等待语音输入...",
-                               size=16, color="#484f58",
-                               anchor="w", padx=16, pady=(28, 12))
-        self.recog_lb.pack(fill="x")
+
+        # 识别文字 + 复制按钮同行
+        rb = ctk.CTkFrame(rc, fg_color="transparent")
+        rb.pack(fill="x", padx=12, pady=(0, 12))
+        rb.pack_info = dict  # dummy
+
+        self.recog_tb = ctk.CTkTextbox(
+            rb, height=80,
+            font=("微软雅黑", 14),
+            fg_color="#0d1117", text_color="#e6edf3",
+            border_width=1, border_color="#21262d",
+            corner_radius=8,
+            scrollbar_button_color="#21262d",
+            activate_scrollbars=False,
+        )
+        self.recog_tb.insert("0.0", "等待语音输入...")
+        self.recog_tb.configure(state="disabled")
+        self.recog_tb.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        def copy_recog():
+            txt = self.recog_tb.get("0.0", "end").strip()
+            if txt and txt != "等待语音输入...":
+                self.clipboard_clear()
+                self.clipboard_append(txt)
+                self.update()
+                self._hist_add(f"[COPY] {txt[:30]}{'...' if len(txt)>30 else ''}", C_BLUE)
+
+        cbtn(rb, "复制", copy_recog, width=72, height=78,
+             fg="#21262d", hover="#30363d",
+             color=C_TEXT).pack(side="right", fill="y")
 
         # 快捷按钮
         qc = cframe(left)
@@ -287,7 +315,7 @@ class VoicePilotApp(ctk.CTk):
         # 命令历史
         hc = cframe(right)
         hc.pack(fill="both", expand=True, pady=(0, 8))
-        clabel(hc, "📋  命令历史", size=12, color=C_DIM,
+        clabel(hc, "[CLIP] 命令历史（点击复制）", size=12, color=C_DIM,
                anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
         self.hist_f = ctk.CTkScrollableFrame(
             hc, fg_color="transparent",
@@ -374,13 +402,53 @@ class VoicePilotApp(ctk.CTk):
         self.orb.create_text(24, 24, text=icon, font=("Segoe UI Emoji", 20))
 
     def _hist_add(self, text, color=C_DIM):
-        lb = clabel(self.hist_f, text, size=10, color=color,
-                    anchor="w", padx=4, pady=2)
-        lb.pack(fill="x")
-        self.hist_items.append(lb)
-        if len(self.hist_items) > 20:
+        import time as _time
+        ts = _time.strftime("%H:%M")
+        full = f"[{ts}] {text}"
+
+        # 外层 Frame：可点击
+        item_f = ctk.CTkFrame(self.hist_f, fg_color="transparent", cursor="hand2")
+        item_f.pack(fill="x", pady=1)
+        item_f.bind("<Button-1>", lambda e, t=text: self._copy_hist(t))
+        item_f.bind("<Enter>", lambda e, f=item_f: f.configure(fg_color="#1f2128"))
+        item_f.bind("<Leave>", lambda e, f=item_f: f.configure(fg_color="transparent"))
+
+        # 时间戳
+        ts_lb = ctk.CTkLabel(
+            item_f, text=f"[{ts}]", font=("微软雅黑", 8),
+            text_color="#484f58", width=42, anchor="w"
+        )
+        ts_lb.pack(side="left", padx=(2, 4))
+
+        # 文字标签
+        lb = ctk.CTkLabel(
+            item_f, text=text, font=("微软雅黑", 10),
+            text_color=color, anchor="w", justify="left"
+        )
+        lb.pack(side="left", fill="x", expand=True)
+
+        # 复制图标
+        cp = ctk.CTkLabel(
+            item_f, text="[copy]",
+            font=("微软雅黑", 8),
+            text_color="#484f58", cursor="hand2",
+            width=40
+        )
+        cp.pack(side="right", padx=(0, 2))
+        cp.bind("<Button-1>", lambda e, t=text, l=lb: self._copy_hist(t))
+        cp.bind("<Enter>", lambda e, c=cp: c.configure(text_color=C_BLUE))
+        cp.bind("<Leave>", lambda e, c=cp: c.configure(text_color="#484f58"))
+
+        self.hist_items.append(item_f)
+        if len(self.hist_items) > 30:
             old = self.hist_items.pop(0)
             old.destroy()
+
+    def _copy_hist(self, text):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
+        self._hist_add(f"[COPIED]", C_BLUE)
 
     def _set_state(self, icon, title, sub, color):
         self._orb(icon, color)
@@ -507,7 +575,10 @@ class VoicePilotApp(ctk.CTk):
 
                 def show():
                     if text:
-                        self.recog_lb.configure(text=text, text_color=C_TEXT)
+                        self.recog_tb.configure(state="normal")
+                        self.recog_tb.delete("0.0", "end")
+                        self.recog_tb.insert("0.0", text)
+                        self.recog_tb.configure(state="disabled", text_color=C_TEXT)
                         self._hist_add(f"识别: {text}", C_BLUE)
                         self.ind_labels["麦克风"].configure(text="识别中", text_color=C_BLUE)
                     else:
