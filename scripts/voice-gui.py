@@ -8,8 +8,17 @@ from faster_whisper import WhisperModel
 import customtkinter as ctk
 
 # ============================================================
-SKILL_DIR   = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(SKILL_DIR, "..", "config.json")
+# PyInstaller 打包后 __file__ 指向 _internal 临时目录，
+# sys._MEIPASS 就是 _internal 的绝对路径
+if getattr(sys, 'frozen', False):
+    # exe 模式：_internal/ 目录（--add-data 的文件都在这里）
+    _BASE_DIR = sys._MEIPASS
+else:
+    # 开发模式：scripts/ 的上级目录（voice-dev-skill/）
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+SKILL_DIR   = os.path.join(_BASE_DIR, "scripts")
+CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
 HF_MIRROR   = "https://hf-mirror.com"
 WAKE_PHRASES = ["嘿贾维斯", "嘿jarvis", "启动语音", "打开语音", "嘿qclaw", "hey jarvis"]
 
