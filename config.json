@@ -8,7 +8,7 @@
     "silence_seconds": 1.5
   },
   "whisper": {
-    "model": "tiny",
+    "model": "base",
     "language": "zh",
     "device": "cpu",
     "compute_type": "int8"

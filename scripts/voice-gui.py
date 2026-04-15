@@ -121,7 +121,7 @@ class VoicePilotApp:
         self.root = tk.Tk()
         self.root.title("VoicePilot — 语音开发助理")
         self.root.configure(bg=BG)
-        self.root.geometry("520x680")
+        self.root.geometry("520x900")
         self.root.resizable(False, False)
         self._build_ui()
 
@@ -237,12 +237,57 @@ class VoicePilotApp:
                  ).pack(anchor=tk.W, padx=18, pady=(12, 6))
 
         self.log_widget = tk.Text(
-            log_frame, height=7, wrap=tk.WORD,
+            log_frame, height=5, wrap=tk.WORD,
             font=tkfont.Font(size=9), fg=DIM, bg=BG,
             relief=tk.FLAT, bd=0, padx=14, pady=8,
             state=tk.DISABLED
         )
         self.log_widget.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 12))
+
+        # ---- 操作指南 ----
+        guide_frame = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
+        guide_frame.pack(fill=tk.X, pady=(0, 14))
+
+        tk.Label(guide_frame, text="📖 使用指南",
+                 font=tkfont.Font(size=11, weight="bold"), fg=BLUE, bg=SURFACE
+                 ).pack(anchor=tk.W, padx=18, pady=(12, 8))
+
+        guide_text = tk.Text(
+            guide_frame, height=10, wrap=tk.WORD,
+            font=tkfont.Font(size=10), fg=TEXT, bg=SURFACE,
+            relief=tk.FLAT, bd=0, padx=18, pady=8,
+            state=tk.DISABLED
+        )
+        guide_text.pack(fill=tk.X)
+
+        # 填充指南内容
+        guide_content = """【操作步骤】
+1. 点击"▶ 开启监听"按钮启动语音识别
+2. 看到"🟢 监听中"后，对着麦克风说出唤醒词
+3. 听到提示音或看到"🎙 命令模式"后，说出指令
+4. 说完指令后等待执行，系统自动返回监听状态
+
+【唤醒词】（任选其一）
+• 嘿贾维斯  • 嘿Jarvis  • 启动语音  • 打开语音
+
+【常用指令示例】
+浏览器操作：新标签、关标签、下一个、上一个
+编辑操作：保存、撤销、重做、复制、粘贴、全选
+窗口切换：切到浏览器、切到Cursor、切终端
+导航操作：往下、往上、查找、替换
+
+【状态说明】
+🔴 已停止 = 未监听，点击开启
+🟢 监听中 = 等待唤醒词
+🟡 唤醒状态 = 等待执行指令
+
+【提示】
+• 说话时音量条会跳动，确保麦克风正常工作
+• 指令说完后停顿1秒左右，系统会自动识别
+• 5分钟无操作会自动退出命令模式"""
+        guide_text.config(state=tk.NORMAL)
+        guide_text.insert(tk.END, guide_content)
+        guide_text.config(state=tk.DISABLED)
 
         # ---- 控制按钮 ----
         btn_row = tk.Frame(container, bg=BG)
@@ -304,7 +349,7 @@ class VoicePilotApp:
             self._append_log("⚠ 模型尚未加载，请稍候…", YELLOW)
             return
         self.is_running = True
-        self._append_log("🎙 监听已开启（等待语音…）", GREEN)
+        self._append_log(f"🎙 监听已开启 (设备={self.mic_cfg.get('device')}, 阈值={self.mic_cfg.get('silence_threshold')})", GREEN)
         self.state_label.config(text="🟢 监听中", fg=GREEN)
         self.toggle_btn.config(text="⏹ 停止监听", bg="#c94444")
         self.status_chip.config(text="🟢 监听中", bg=GREEN, fg=BG)
@@ -327,8 +372,8 @@ class VoicePilotApp:
         sr    = cfg.get("sample_rate", 16000)
         dev   = cfg.get("device", None)
         thr   = cfg.get("silence_threshold", 0.02)
-        min_  = cfg.get("min_utterance_s", 0.3)
-        sil_  = cfg.get("silence_gap_s", 1.5)
+        min_  = cfg.get("min_phrase_seconds", cfg.get("min_utterance_s", 0.3))
+        sil_  = cfg.get("silence_seconds", cfg.get("silence_gap_s", 1.5))
 
         buf_s = int(sr * 0.5)   # 每块 0.5s
 
@@ -369,10 +414,27 @@ class VoicePilotApp:
 
     # ------------------------------------------------------------------ 识别 + 执行
     def _transcribe_and_act(self, audio):
-        lang  = self.wy_cfg.get("language", "zh")
-        segs, _ = self.model.transcribe(audio, language=lang,
-                                         beam_size=1, vad_filter=False)
+        # 强制简体中文 + 优化参数
+        segs, _ = self.model.transcribe(
+            audio, 
+            language="zh",
+            task="transcribe",
+            beam_size=5,
+            best_of=5,
+            patience=1.0,
+            length_penalty=1.0,
+            temperature=0.0,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            condition_on_previous_text=False,
+            initial_prompt="以下是普通话的句子。"
+        )
         text  = "".join(s.text for s in segs).strip()
+        
+        # 强制转换繁体为简体（如果识别出繁体）
+        text = self._to_simplified(text)
+        
         self._show_recog(text)
 
         if not text:
@@ -390,6 +452,31 @@ class VoicePilotApp:
             self._execute(text)
         else:
             self._append_log(f"（未识别为唤醒词，忽略）", DIM)
+
+    def _to_simplified(self, text):
+        """简繁转换（基础版）"""
+        # 常见繁体 -> 简体映射
+        trad_to_simp = {
+            '開': '开', '關': '关', '語': '语', '語音': '语音',
+            '識': '识', '識別': '识别', '監': '监', '聽': '听',
+            '態': '态', '狀': '状', '態': '态', '復': '复',
+            '製': '制', '製作': '制作', '後': '后', '個': '个',
+            '們': '们', '來': '来', '時': '时', '間': '间',
+            '還': '还', '讓': '让', '這': '这', '裡': '里',
+            '麼': '么', '麼': '么', '們': '们', '從': '从',
+            '實': '实', '現': '现', '試': '试', '驗': '验',
+            '話': '话', '說': '说', '請': '请', '問': '问',
+            '對': '对', '應': '应', '該': '该', '當': '当',
+            '過': '过', '進': '进', '將': '将', '為': '为',
+            '無': '无', '論': '论', '與': '与', '於': '于',
+            '並': '并', '兩': '两', '點': '点', '經': '经',
+            '長': '长', '門': '门', '頁': '页', '關': '关',
+            '標': '标', '題': '题', '執': '执', '行': '行',
+            '嗎': '吗', '呢': '呢', '吧': '吧', '啊': '啊',
+        }
+        for t, s in trad_to_simp.items():
+            text = text.replace(t, s)
+        return text
 
     def _on_wake(self, phrase, text):
         self.is_woken = True
