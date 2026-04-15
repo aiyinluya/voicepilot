@@ -1,607 +1,619 @@
 """
-voice-gui.py — VoicePilot 可视化界面 v2
-=========================================
-功能：实时音量可视化 + 唤醒词检测 + 语音识别 + 执行反馈
-
-使用方式:
-    python voice-gui.py --config ../config.json
+VoicePilot 主界面 — customtkinter 重构版
 """
-
-import os, sys, json, time, subprocess, threading, signal as _signal
+import os, sys, json, time, subprocess, threading, queue
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
+import customtkinter as ctk
 
-import tkinter as tk
-from tkinter import font as tkfont
-
-# ============================================================
-# 配置
 # ============================================================
 SKILL_DIR   = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SKILL_DIR, "..", "config.json")
 HF_MIRROR   = "https://hf-mirror.com"
-
-# 唤醒词列表（需与 wake-listener.py 保持一致）
 WAKE_PHRASES = ["嘿贾维斯", "嘿jarvis", "启动语音", "打开语音", "嘿qclaw", "hey jarvis"]
 
-# ============================================================
-# 颜色主题
-# ============================================================
-BG        = "#0d1117"
-SURFACE   = "#161b22"
-BORDER    = "#30363d"
-TEXT      = "#e6edf3"
-DIM       = "#8b949e"
-GREEN     = "#3fb950"
-RED       = "#f85149"
-YELLOW    = "#d29922"
-PURPLE    = "#bc8cff"
-BLUE      = "#58a6ff"
+# 颜色常量
+C_BG      = "#0d1117"
+C_SURFACE = "#161b22"
+C_BORDER  = "#21262d"
+C_TEXT    = "#e6edf3"
+C_DIM     = "#8b949e"
+C_GREEN   = "#3fb950"
+C_YELLOW  = "#d29922"
+C_RED     = "#f85149"
+C_BLUE    = "#58a6ff"
+C_PURPLE  = "#bc8cff"
 
 # ============================================================
-# 工具函数
-# ============================================================
-def log(msg):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+def load_config(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def check_wake(text):
-    text_norm = text.lower().replace(" ", "").replace("\u3000", "")
-    for phrase in WAKE_PHRASES:
-        phrase_norm = phrase.lower().replace(" ", "").replace("\u3000", "")
-        if phrase_norm in text_norm or text_norm in phrase_norm:
-            return phrase
+    tn = text.lower().replace(" ", "").replace("\u3000", "")
+    for p in WAKE_PHRASES:
+        pn = p.lower().replace(" ", "").replace("\u3000", "")
+        if pn in tn or tn in pn:
+            return p
     return None
 
-def run_powershell(script_path):
-    """安全执行 PowerShell 脚本，返回 (success, output)"""
+def send_keys(key_str):
+    script = os.path.join(SKILL_DIR, "window.ps1")
     try:
         r = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", script_path],
-            capture_output=True, text=True, timeout=15
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
+             "-Action", "keys", "-Keys", key_str],
+            capture_output=True, timeout=10
         )
-        out = r.stdout.strip()
-        ok = r.returncode == 0 and "false" not in out.lower()
-        return ok, out
-    except Exception as e:
-        return False, str(e)
-
-def send_keys(keys_str):
-    """通过 window.ps1 发送快捷键"""
-    script = os.path.join(SKILL_DIR, "window.ps1")
-    r = subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
-         "-action", "keys", "-keys", keys_str],
-        capture_output=True, text=True, timeout=10
-    )
-    return r.returncode == 0
+        return r.returncode == 0
+    except Exception:
+        return False
 
 def activate_app(app_name):
-    """通过 window.ps1 激活应用"""
     script = os.path.join(SKILL_DIR, "window.ps1")
-    r = subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
-         "-action", "activate", "-app", app_name],
-        capture_output=True, text=True, timeout=10
+    try:
+        r = subprocess.run(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
+             "-Action", "activate", "-app", app_name],
+            capture_output=True, timeout=10
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def to_simplified(text):
+    pairs = [
+        ('開','开'),('關','关'),('識別','识别'),('標籤','标签'),
+        ('監','监'),('聽','听'),('語音','语音'),('們','们'),
+        ('時','时'),('間','间'),('請','请'),('說','说'),
+        ('話','话'),('對','对'),('為','为'),('過','过'),
+        ('進','进'),('號','号'),('種','种'),
+    ]
+    for t, s in pairs:
+        text = text.replace(t, s)
+    return text
+
+# ============================================================
+class WaveCanvas(ctk.CTkCanvas):
+    """实时波形显示，60fps"""
+    def __init__(self, master, height=150, **kwargs):
+        super().__init__(master, height=height, **kwargs)
+        self.configure(bg=C_BG, highlightthickness=0, bd=0)
+        self.height   = height
+        self.data     = []
+        self.max_pts  = 300
+        self.rms_h    = []
+        self.max_rms  = 50
+        self._schedule()
+
+    def push(self, chunk):
+        rms = float(np.sqrt(np.mean(chunk ** 2)))
+        self.rms_h.append(rms)
+        if len(self.rms_h) > self.max_rms:
+            self.rms_h.pop(0)
+        step = max(1, len(chunk) // self.max_pts)
+        self.data = chunk[::step].tolist()
+
+    def _schedule(self):
+        self._draw()
+        if self.winfo_exists():
+            self.after(50, self._schedule)
+
+    def _draw(self):
+        self.delete("all")
+        w = self.winfo_width() or 640
+        h = self.height
+        cx = w / 2
+
+        if self.rms_h:
+            latest = self.rms_h[-1]
+            bw  = min(int(latest * 250), w)
+            col = C_GREEN if latest < 0.6 else C_YELLOW if latest < 0.85 else C_RED
+            # tkinter 不支持 RGBA，用半透明多边形代替
+            self.create_polygon(0, 0, bw, 0, bw, h, 0, h, fill=col, outline="")
+
+        self.create_line(0, h/2, w, h/2, fill=C_BORDER, width=1)
+
+        if self.data:
+            n = len(self.data)
+            xs = [int(i * w / max(n-1, 1)) for i in range(n)]
+            for i in range(n-1):
+                y0 = max(1, min(h-1, int(h/2 - self.data[i]   * h * 0.45)))
+                y1 = max(1, min(h-1, int(h/2 - self.data[i+1] * h * 0.45)))
+                self.create_line(xs[i], y0, xs[i+1], y1, fill=C_BLUE, width=2)
+
+# ============================================================
+def cframe(parent, **kw):
+    return ctk.CTkFrame(parent, fg_color=kw.get("fg", C_SURFACE), corner_radius=12)
+
+def clabel(parent, text, **kw):
+    lb = ctk.CTkLabel(
+        parent,
+        text=text,
+        font=kw.get("font", ("微软雅黑", kw.get("size", 12))),
+        text_color=kw.get("color", C_DIM),
+        anchor=kw.get("anchor", "w"),
+        justify=kw.get("justify", "left"),
+        wraplength=kw.get("wrap", 0)
     )
-    return r.returncode == 0
+    # 间距由 .pack(padx=..., pady=...) 控制
+    return lb
+
+def cbtn(parent, text, cmd, **kw):
+    return ctk.CTkButton(
+        parent,
+        text=text,
+        font=kw.get("font", ("微软雅黑", 11)),
+        width=kw.get("width", 80),
+        height=kw.get("height", 36),
+        command=cmd,
+        fg_color=kw.get("fg", C_BORDER),
+        hover_color=kw.get("hover", "#30363d"),
+        text_color=kw.get("color", C_TEXT),
+        corner_radius=6
+    )
 
 # ============================================================
-# 主应用
-# ============================================================
-class VoicePilotApp:
-    def __init__(self, config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            self.cfg = json.load(f)
-        self.mic_cfg  = self.cfg.get("mic", {})
-        self.wy_cfg   = self.cfg.get("whisper", {})
-        self.cmds     = self.cfg.get("commands", {})
+class VoicePilotApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
-        # 运行时状态
-        self.model          = None
-        self.stream         = None
-        self.is_running    = False
-        self.is_woken       = False    # 是否已唤醒（进入命令模式）
-        self.ring_buf       = np.array([], dtype=np.float32)
-        self.silence_count  = 0
-        self.is_speaking    = False
-        self.current_rms    = 0.0
-        self.last_activity  = time.time()
-        self.cmd_history    = []       # 最近执行的命令
+        self.cfg     = load_config(CONFIG_PATH)
+        self.mic_cfg = self.cfg.get("mic", {})
+        self.wy_cfg  = self.cfg.get("whisper", {})
+        self.cmds    = self.cfg.get("commands", {})
 
-        # 日志行（显示在滚动 text widget 里）
-        self.log_lines = []
-        self.max_log   = 50
+        self.model        = None
+        self.is_listening = False
+        self.is_woken     = False
+        self.last_seen    = time.time()
+        self.start_time   = time.time()
+        self.audio_q      = queue.Queue(maxsize=20)
 
-        # 加载模型（异步）
-        self._load_model_async()
+        self.title("VoicePilot 语音开发助理")
+        self.geometry("960x720")
+        self.resizable(False, False)
+        self.configure(fg_color=C_BG)
 
-        # ---- Tk 窗口 ----
-        self.root = tk.Tk()
-        self.root.title("VoicePilot — 语音开发助理")
-        self.root.configure(bg=BG)
-        self.root.geometry("520x900")
-        self.root.resizable(False, False)
         self._build_ui()
+        self._load_model_async()
+        self._tick()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.mainloop()
 
-        # 定期更新 UI
-        self.root.after(80, self._ui_tick)
-
-        # 优雅退出
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.mainloop()
-
-    # ------------------------------------------------------------------ UI 构建
+    # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        container = tk.Frame(self.root, bg=BG)
-        container.pack(fill=tk.BOTH, expand=True, padx=20, pady=16)
+        # === 标题栏 ===
+        header = ctk.CTkFrame(self, height=72, fg_color=C_SURFACE)
+        header.pack(fill="x")
+        header.pack_propagate(False)
 
-        # ---- 标题栏 ----
-        title_frame = tk.Frame(container, bg=BG)
-        title_frame.pack(fill=tk.X, pady=(0, 14))
+        self.orb = ctk.CTkCanvas(header, width=48, height=48,
+                                   bg=C_SURFACE, highlightthickness=0)
+        self.orb.create_oval(4, 4, 44, 44, fill=C_DIM, outline=C_DIM, width=2)
+        self.orb.create_text(24, 24, text="🎤", font=("Segoe UI Emoji", 20))
+        self.orb.pack(side="left", padx=20, pady=12)
 
-        tk.Label(title_frame, text="🎤 VoicePilot",
-                 font=tkfont.Font(size=18, weight="bold"), fg=TEXT, bg=BG
-                 ).pack(side=tk.LEFT)
+        title_col = ctk.CTkFrame(header, fg_color="transparent")
+        title_col.pack(side="left", pady=12)
+        clabel(title_col, "VoicePilot",
+               font=("微软雅黑", 20, "bold"), color=C_TEXT, padx=8, pady=0).pack(anchor="w")
+        clabel(title_col, "动嘴不动手 · 语音开发助理",
+               size=10, color=C_DIM, padx=8, pady=0).pack(anchor="w")
 
-        self.status_chip = tk.Label(
-            title_frame, text="⏳ 加载模型…",
-            font=tkfont.Font(size=10), fg=BG, bg=YELLOW,
-            padx=10, pady=3, relief=tk.GROOVE, bd=2
+        st_col = ctk.CTkFrame(header, fg_color="transparent")
+        st_col.pack(side="right", padx=20, pady=12)
+        self.state_title = clabel(st_col, "未启动", font=("微软雅黑", 13, "bold"),
+                                  color=C_DIM, anchor="e", padx=0, pady=2)
+        self.state_title.pack(anchor="e")
+        self.state_sub = clabel(st_col, "点击开始监听",
+                                size=9, color="#484f58", anchor="e", padx=0, pady=0)
+        self.state_sub.pack(anchor="e")
+
+        # === 主区 ===
+        main = ctk.CTkFrame(self, fg_color=C_BG)
+        main.pack(fill="both", expand=True, padx=16, pady=(8, 16))
+        main.columnconfigure(0, weight=3)
+        main.columnconfigure(1, weight=2)
+
+        # -- 左列 --
+        left = ctk.CTkFrame(main, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        # 波形
+        wfc = cframe(left)
+        wfc.pack(fill="x", pady=(0, 8))
+        clabel(wfc, "🔊  实时波形", size=12, color=C_DIM,
+               anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+        self.wave = WaveCanvas(wfc, height=150)
+        self.wave.pack(fill="x", padx=12, pady=(0, 12))
+
+        # 状态指标
+        inc = cframe(left)
+        inc.pack(fill="x", pady=(0, 8))
+        clabel(inc, "📊  状态指标", size=12, color=C_DIM,
+               anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+
+        self.ind_labels = {}
+        ind_grid = ctk.CTkFrame(inc, fg_color="transparent")
+        ind_grid.pack(fill="x", padx=12, pady=(0, 12))
+        for i, (t, v, col) in enumerate([
+            ("🎙 麦克风",   "就绪",    C_DIM),
+            ("📡 模式",     "等待唤醒", C_DIM),
+            ("⏱ 运行时长", "0:00",    C_DIM),
+            ("📝 最后指令", "—",       C_DIM),
+        ]):
+            cell = ctk.CTkFrame(ind_grid, fg_color=C_BG, corner_radius=8)
+            cell.grid(row=0, column=i, padx=4, sticky="ew")
+            ind_grid.columnconfigure(i, weight=1)
+            clabel(cell, t, size=9, color="#484f58").pack(anchor="center", pady=2)
+            lb = clabel(cell, v, size=11, color=col, pady=(2,8))
+            lb.pack(anchor="center")
+            self.ind_labels[t.split(" ", 1)[1]] = lb
+
+        # 识别结果
+        rc = cframe(left)
+        rc.pack(fill="x", pady=(0, 8))
+        clabel(rc, "🗣  识别内容", size=12, color=C_DIM,
+               anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+        self.recog_lb = clabel(rc, "等待语音输入...",
+                               size=16, color="#484f58",
+                               anchor="w", padx=16, pady=(28, 12))
+        self.recog_lb.pack(fill="x")
+
+        # 快捷按钮
+        qc = cframe(left)
+        qc.pack(fill="x", pady=(0, 0))
+        clabel(qc, "⚡  快捷指令（点击直接执行）",
+               size=12, color=C_DIM, anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+        qf = ctk.CTkFrame(qc, fg_color="transparent")
+        qf.pack(fill="x", padx=12, pady=(0, 12))
+        for i, (lb, key) in enumerate([
+            ("新标签", "^t"), ("关标签", "^w"), ("保存", "^s"),
+            ("撤销", "^z"), ("复制", "^c"), ("粘贴", "^v"),
+            ("浏览器", "browser"), ("Cursor", "cursor"),
+        ]):
+            cbtn(qf, lb, lambda k=key, l=lb: self._quick(l, k),
+                 width=70, height=34
+                 ).grid(row=0, column=i, padx=3, pady=4)
+
+        # -- 右列 --
+        right = ctk.CTkFrame(main, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+
+        # 命令历史
+        hc = cframe(right)
+        hc.pack(fill="both", expand=True, pady=(0, 8))
+        clabel(hc, "📋  命令历史", size=12, color=C_DIM,
+               anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+        self.hist_f = ctk.CTkScrollableFrame(
+            hc, fg_color="transparent",
+            scrollbar_button_color=C_BORDER, label_text=""
         )
-        self.status_chip.pack(side=tk.RIGHT)
+        self.hist_f.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.hist_items = []
+        self._hist_add("欢迎使用 VoicePilot 👋", C_DIM)
 
-        sep(container, BORDER).pack(fill=tk.X, pady=(0, 14))
-
-        # ---- 主状态卡片 ----
-        card = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
-        card.pack(fill=tk.X, pady=(0, 14))
-
-        # 状态行
-        row = tk.Frame(card, bg=SURFACE)
-        row.pack(fill=tk.X, padx=18, pady=(18, 4))
-        tk.Label(row, text="状态", font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-                 ).pack(side=tk.LEFT)
-        self.state_label = tk.Label(
-            row, text="🔴 已停止",
-            font=tkfont.Font(size=13, weight="bold"), fg=RED, bg=SURFACE
+        # 使用指南
+        gc = cframe(right)
+        gc.pack(fill="x", pady=(0, 0))
+        clabel(gc, "📖  使用指南", size=12, color=C_BLUE,
+               anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
+        guide_text = (
+            "【操作步骤】\n"
+            "① 点击「开始监听」按钮\n"
+            "② 对着麦克风说话，音量条跳动\n"
+            "③ 说唤醒词 → 进入命令模式\n"
+            "④ 说指令 → 自动执行\n\n"
+            "【唤醒词】\n"
+            "嘿贾维斯 · 嘿Jarvis · 启动语音 · 打开语音\n\n"
+            "【常用指令】\n"
+            "新标签 · 关标签 · 保存 · 撤销 · 复制 · 粘贴\n"
+            "切到浏览器 · 切到Cursor · 往下 · 往上\n\n"
+            "【状态颜色】\n"
+            "🟢 绿色 = 命令模式 / 执行成功\n"
+            "🟡 黄色 = 识别中 / 执行中\n"
+            "🔴 红色 = 未识别 / 执行失败\n"
+            "🔵 蓝色 = 等待唤醒"
         )
-        self.state_label.pack(side=tk.RIGHT)
+        clabel(gc, guide_text, size=10, color=C_DIM,
+               anchor="nw", justify="left", wrap=320,
+               padx=16, pady=(0, 12)).pack(fill="x")
 
-        sep(card, BORDER).pack(fill=tk.X, padx=18, pady=4)
+        # === 底部控制栏 ===
+        footer = ctk.CTkFrame(self, height=80, fg_color=C_SURFACE)
+        footer.pack(fill="x")
+        footer.pack_propagate(False)
+        ft = ctk.CTkFrame(footer, fg_color="transparent")
+        ft.pack(fill="both", expand=True, padx=20, pady=12)
 
-        # 唤醒状态行
-        row2 = tk.Frame(card, bg=SURFACE)
-        row2.pack(fill=tk.X, padx=18, pady=4)
-        tk.Label(row2, text="唤醒", font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-                 ).pack(side=tk.LEFT)
-        self.wake_label = tk.Label(
-            row2, text="等待唤醒…",
-            font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-        )
-        self.wake_label.pack(side=tk.RIGHT)
-
-        sep(card, BORDER).pack(fill=tk.X, padx=18, pady=4)
-
-        # 最后命令行
-        row3 = tk.Frame(card, bg=SURFACE)
-        row3.pack(fill=tk.X, padx=18, pady=(4, 18))
-        tk.Label(row3, text="命令", font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-                 ).pack(side=tk.LEFT)
-        self.cmd_label = tk.Label(
-            row3, text="—",
-            font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-        )
-        self.cmd_label.pack(side=tk.RIGHT)
-
-        # ---- 音量条 ----
-        vol_frame = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
-        vol_frame.pack(fill=tk.X, pady=(0, 14))
-
-        tk.Label(vol_frame, text="🔊 音量", font=tkfont.Font(size=11), fg=DIM,
-                 bg=SURFACE
-                 ).pack(anchor=tk.W, padx=18, pady=(12, 4))
-
-        self.vol_canvas = tk.Canvas(vol_frame, height=32, bg=BG,
-                                    highlightthickness=0)
-        self.vol_canvas.pack(fill=tk.X, padx=18, pady=(0, 12))
-        self.vol_bg    = self.vol_canvas.create_rectangle(0, 0, 9999, 32, fill="#1c2128")
-        self.vol_bar   = self.vol_canvas.create_rectangle(0, 0, 0, 32, fill=GREEN)
-        self.vol_text  = self.vol_canvas.create_text(8, 16, text="0%", anchor=tk.W,
-                                                      fill=TEXT, font=tkfont.Font(size=10))
-
-        # ---- 识别结果 ----
-        recog_frame = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
-        recog_frame.pack(fill=tk.X, pady=(0, 14))
-
-        tk.Label(recog_frame, text="🗣 识别内容",
-                 font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-                 ).pack(anchor=tk.W, padx=18, pady=(12, 6))
-
-        self.recog_text = tk.Text(
-            recog_frame, height=5, wrap=tk.WORD,
-            font=tkfont.Font(size=13), fg=TEXT, bg=BG,
-            relief=tk.FLAT, bd=0, padx=14, pady=10,
-            insertbackground=TEXT,
-            state=tk.DISABLED
-        )
-        self.recog_text.pack(fill=tk.X, padx=18, pady=(0, 12))
-
-        # ---- 日志区域 ----
-        log_frame = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 14))
-
-        tk.Label(log_frame, text="📋 日志",
-                 font=tkfont.Font(size=11), fg=DIM, bg=SURFACE
-                 ).pack(anchor=tk.W, padx=18, pady=(12, 6))
-
-        self.log_widget = tk.Text(
-            log_frame, height=5, wrap=tk.WORD,
-            font=tkfont.Font(size=9), fg=DIM, bg=BG,
-            relief=tk.FLAT, bd=0, padx=14, pady=8,
-            state=tk.DISABLED
-        )
-        self.log_widget.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 12))
-
-        # ---- 操作指南 ----
-        guide_frame = tk.Frame(container, bg=SURFACE, relief=tk.GROOVE, bd=1)
-        guide_frame.pack(fill=tk.X, pady=(0, 14))
-
-        tk.Label(guide_frame, text="📖 使用指南",
-                 font=tkfont.Font(size=11, weight="bold"), fg=BLUE, bg=SURFACE
-                 ).pack(anchor=tk.W, padx=18, pady=(12, 8))
-
-        guide_text = tk.Text(
-            guide_frame, height=10, wrap=tk.WORD,
-            font=tkfont.Font(size=10), fg=TEXT, bg=SURFACE,
-            relief=tk.FLAT, bd=0, padx=18, pady=8,
-            state=tk.DISABLED
-        )
-        guide_text.pack(fill=tk.X)
-
-        # 填充指南内容
-        guide_content = """【操作步骤】
-1. 点击"▶ 开启监听"按钮启动语音识别
-2. 看到"🟢 监听中"后，对着麦克风说出唤醒词
-3. 听到提示音或看到"🎙 命令模式"后，说出指令
-4. 说完指令后等待执行，系统自动返回监听状态
-
-【唤醒词】（任选其一）
-• 嘿贾维斯  • 嘿Jarvis  • 启动语音  • 打开语音
-
-【常用指令示例】
-浏览器操作：新标签、关标签、下一个、上一个
-编辑操作：保存、撤销、重做、复制、粘贴、全选
-窗口切换：切到浏览器、切到Cursor、切终端
-导航操作：往下、往上、查找、替换
-
-【状态说明】
-🔴 已停止 = 未监听，点击开启
-🟢 监听中 = 等待唤醒词
-🟡 唤醒状态 = 等待执行指令
-
-【提示】
-• 说话时音量条会跳动，确保麦克风正常工作
-• 指令说完后停顿1秒左右，系统会自动识别
-• 5分钟无操作会自动退出命令模式"""
-        guide_text.config(state=tk.NORMAL)
-        guide_text.insert(tk.END, guide_content)
-        guide_text.config(state=tk.DISABLED)
-
-        # ---- 控制按钮 ----
-        btn_row = tk.Frame(container, bg=BG)
-        btn_row.pack(fill=tk.X)
-
-        self.toggle_btn = tk.Button(
-            btn_row, text="▶ 开启监听",
-            font=tkfont.Font(size=13, weight="bold"),
-            width=16, height=2,
+        self.main_btn = ctk.CTkButton(
+            ft, text="▶  开始监听",
+            font=("微软雅黑", 15, "bold"),
+            width=180, height=48,
             command=self._toggle,
-            bg="#0d419d", fg=TEXT, relief=tk.FLAT,
-            activebackground="#1a6fd4", activeforeground=TEXT,
-            cursor="hand2"
+            fg_color="#1f6feb", hover_color="#388bfd",
+            text_color="white", corner_radius=10
         )
-        self.toggle_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 6))
+        self.main_btn.pack(side="left", pady=4)
 
-        tk.Button(
-            btn_row, text="✕ 退出",
-            font=tkfont.Font(size=13, weight="bold"),
-            width=8, height=2,
+        info_lb = clabel(
+            ft,
+            f"模型: {self.wy_cfg.get('model','base')}  ·  "
+            f"设备: {self.mic_cfg.get('device',1)}  ·  "
+            f"阈值: {self.mic_cfg.get('silence_threshold',0.02)}",
+            size=9, color="#484f58", anchor="w"
+        )
+        info_lb.pack(side="left", padx=16, fill="x", expand=True)
+
+        ctk.CTkButton(
+            ft, text="■ 停止",
+            font=("微软雅黑", 13, "bold"),
+            width=90, height=44,
+            command=self._stop,
+            fg_color=C_BORDER, hover_color="#30363d",
+            text_color=C_DIM, corner_radius=8
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            ft, text="✕ 退出",
+            font=("微软雅黑", 13),
+            width=80, height=44,
             command=self._on_close,
-            bg="#6e1616", fg=TEXT, relief=tk.FLAT,
-            activebackground="#9d2424", activeforeground=TEXT,
-            cursor="hand2"
-        ).pack(side=tk.RIGHT, fill=tk.X)
+            fg_color="#3d1515", hover_color="#6e2424",
+            text_color=C_RED, corner_radius=8
+        ).pack(side="right")
 
-    # ------------------------------------------------------------------ 模型加载
+    # ------------------------------------------------------------------ 辅助
+    def _orb(self, icon, color):
+        self.orb.delete("all")
+        self.orb.create_oval(4, 4, 44, 44, fill=color, outline=color, width=2)
+        self.orb.create_text(24, 24, text=icon, font=("Segoe UI Emoji", 20))
+
+    def _hist_add(self, text, color=C_DIM):
+        lb = clabel(self.hist_f, text, size=10, color=color,
+                    anchor="w", padx=4, pady=2)
+        lb.pack(fill="x")
+        self.hist_items.append(lb)
+        if len(self.hist_items) > 20:
+            old = self.hist_items.pop(0)
+            old.destroy()
+
+    def _set_state(self, icon, title, sub, color):
+        self._orb(icon, color)
+        self.state_title.configure(text=title, text_color=color)
+        self.state_sub.configure(text=sub)
+
+    # ------------------------------------------------------------------ 模型
     def _load_model_async(self):
-        threading.Thread(target=self._do_load_model, daemon=True).start()
+        def run():
+            try:
+                os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
+                mn = self.wy_cfg.get("model", "base")
+                t0 = time.time()
+                self.model = WhisperModel(
+                    mn,
+                    device=self.wy_cfg.get("device", "cpu"),
+                    compute_type=self.wy_cfg.get("compute_type", "int8")
+                )
+                self.after(0, lambda: self._on_model_loaded(t0, mn))
+            except Exception as e:
+                self.after(0, lambda: self._set_state("❌", "加载失败", str(e)[:40], C_RED))
+                self.after(0, lambda: self._hist_add(f"模型加载失败: {e}", C_RED))
+        threading.Thread(target=run, daemon=True).start()
 
-    def _do_load_model(self):
-        try:
-            os.environ.setdefault("HF_ENDPOINT", HF_MIRROR)
-            model_name = self.wy_cfg.get("model", "tiny")
-            self._append_log(f"加载模型 {model_name} …")
-            t0 = time.time()
-            self.model = WhisperModel(
-                model_name,
-                device=self.wy_cfg.get("device", "cpu"),
-                compute_type=self.wy_cfg.get("compute_type", "int8")
-            )
-            self._append_log(f"✅ 模型加载完成 ({time.time()-t0:.1f}s)", GREEN)
-            self.root.after(0, lambda: self.status_chip.config(
-                text="✅ 已就绪", bg=GREEN, fg=BG))
-        except Exception as e:
-            self._append_log(f"❌ 模型加载失败: {e}", RED)
-            self.root.after(0, lambda: self.status_chip.config(
-                text="❌ 加载失败", bg=RED, fg=TEXT))
+    def _on_model_loaded(self, t0, mn):
+        self._set_state("✅", "就绪", f"Whisper {mn} 加载完成 ({t0:.1f}s)", C_GREEN)
+        self._hist_add(f"✅ 模型加载完成 ({t0:.1f}s)", C_GREEN)
 
-    # ------------------------------------------------------------------ 开关监听
+    # ------------------------------------------------------------------ 开关
     def _toggle(self):
-        if self.is_running:
+        if self.is_listening:
             self._stop()
         else:
             self._start()
 
     def _start(self):
         if self.model is None:
-            self._append_log("⚠ 模型尚未加载，请稍候…", YELLOW)
+            self._hist_add("⚠ 模型未加载，请稍候...", C_YELLOW)
             return
-        self.is_running = True
-        self._append_log(f"🎙 监听已开启 (设备={self.mic_cfg.get('device')}, 阈值={self.mic_cfg.get('silence_threshold')})", GREEN)
-        self.state_label.config(text="🟢 监听中", fg=GREEN)
-        self.toggle_btn.config(text="⏹ 停止监听", bg="#c94444")
-        self.status_chip.config(text="🟢 监听中", bg=GREEN, fg=BG)
-
+        self.is_listening = True
+        self._set_state("🟢", "监听中", "等待唤醒词...", C_GREEN)
+        self.ind_labels["麦克风"].configure(text="监听中", text_color=C_GREEN)
+        self.ind_labels["模式"].configure(text="等待唤醒", text_color=C_YELLOW)
+        self.main_btn.configure(text="⏹  监听中...", fg_color=C_GREEN, hover_color="#3fb950")
+        self._hist_add("🎙 开始监听，等待语音...", C_GREEN)
         threading.Thread(target=self._listen_loop, daemon=True).start()
 
     def _stop(self):
-        self.is_running = False
-        self.is_woken   = False
-        self._append_log("⏹ 监听已停止", DIM)
-        self.state_label.config(text="🔴 已停止", fg=RED)
-        self.wake_label.config(text="等待唤醒…", fg=DIM)
-        self.toggle_btn.config(text="▶ 开启监听", bg="#0d419d")
-        self.status_chip.config(text="✅ 已就绪", bg=GREEN, fg=BG)
-        self.recog_clear()
+        self.is_listening = False
+        self.is_woken = False
+        self._set_state("🔵", "已停止", "点击开始监听", C_DIM)
+        self.ind_labels["麦克风"].configure(text="就绪", text_color=C_DIM)
+        self.ind_labels["模式"].configure(text="已停止", text_color=C_DIM)
+        self.main_btn.configure(text="▶  开始监听", fg_color="#1f6feb", hover_color="#388bfd")
+        self._hist_add("⏹ 监听已停止", C_DIM)
 
-    # ------------------------------------------------------------------ 音频循环
+    # ------------------------------------------------------------------ 音频
     def _listen_loop(self):
-        cfg   = self.mic_cfg
-        sr    = cfg.get("sample_rate", 16000)
-        dev   = cfg.get("device", None)
-        thr   = cfg.get("silence_threshold", 0.02)
-        min_  = cfg.get("min_phrase_seconds", cfg.get("min_utterance_s", 0.3))
-        sil_  = cfg.get("silence_seconds", cfg.get("silence_gap_s", 1.5))
+        cfg  = self.mic_cfg
+        sr   = cfg.get("sample_rate", 16000)
+        dev  = cfg.get("device", 1)
+        thr  = cfg.get("silence_threshold", 0.02)
+        min_ = cfg.get("min_phrase_seconds", 0.5)
+        sil_ = cfg.get("silence_seconds", 1.5)
+        buf  = 1024
 
-        buf_s = int(sr * 0.5)   # 每块 0.5s
+        ring = np.array([], dtype=np.float32)
+        sil  = 0
+        spk  = False
 
-        def callback(indata, frames, t_info, status):
+        def cb(indata, frames, t_info, status):
+            nonlocal ring, sil, spk
             chunk = indata[:, 0].astype(np.float32)
             rms   = np.sqrt(np.mean(chunk ** 2))
 
-            # 更新音量（主线程读取）
-            self.current_rms = rms
+            if self.is_listening:
+                try:
+                    self.audio_q.put_nowait(chunk)
+                except queue.Full:
+                    pass
 
             if rms > thr:
-                self.ring_buf  = np.concatenate([self.ring_buf, chunk])
-                self.silence_count = 0
-                self.is_speaking   = True
-                self.last_activity = time.time()
+                ring = np.concatenate([ring, chunk])
+                sil  = 0
+                spk  = True
+                self.last_seen = time.time()
             else:
-                if self.is_speaking:
-                    self.silence_count += frames
-                    min_samples = int(sr * min_)
-                    if self.silence_count >= int(sr * sil_):
-                        if len(self.ring_buf) >= min_samples:
-                            audio = self.ring_buf.copy()
-                            self.ring_buf = np.array([], dtype=np.float32)
-                            self.is_speaking = False
-                            self._transcribe_and_act(audio)
+                if spk:
+                    sil += frames
+                    if sil >= int(sr * sil_):
+                        dur = len(ring) / sr
+                        if dur >= min_ and len(ring) > 0:
+                            audio = ring.copy()
+                            ring  = np.array([], dtype=np.float32)
+                            spk   = False
+                            self._transcribe(audio)
                         else:
-                            self.ring_buf = np.array([], dtype=np.float32)
-                            self.is_speaking = False
+                            ring = np.array([], dtype=np.float32)
+                            spk  = False
+                else:
+                    sil = 0
 
         try:
             with sd.InputStream(samplerate=sr, channels=1, dtype="float32",
-                                device=dev, blocksize=buf_s,
-                                callback=callback):
-                while self.is_running:
-                    time.sleep(0.1)
+                               device=dev, blocksize=buf, callback=cb):
+                while self.is_listening:
+                    time.sleep(0.05)
         except Exception as e:
-            self._append_log(f"❌ 音频流错误: {e}", RED)
+            self.after(0, lambda: self._hist_add(f"❌ 音频错误: {e}", C_RED))
 
-    # ------------------------------------------------------------------ 识别 + 执行
-    def _transcribe_and_act(self, audio):
-        # 强制简体中文 + 优化参数
-        segs, _ = self.model.transcribe(
-            audio, 
-            language="zh",
-            task="transcribe",
-            beam_size=5,
-            best_of=5,
-            patience=1.0,
-            length_penalty=1.0,
-            temperature=0.0,
-            compression_ratio_threshold=2.4,
-            log_prob_threshold=-1.0,
-            no_speech_threshold=0.6,
-            condition_on_previous_text=False,
-            initial_prompt="以下是普通话的句子。"
-        )
-        text  = "".join(s.text for s in segs).strip()
-        
-        # 强制转换繁体为简体（如果识别出繁体）
-        text = self._to_simplified(text)
-        
-        self._show_recog(text)
+    # ------------------------------------------------------------------ 识别
+    def _transcribe(self, audio):
+        def run():
+            try:
+                segs, _ = self.model.transcribe(
+                    audio, language="zh",
+                    task="transcribe",
+                    beam_size=5, best_of=5,
+                    patience=1.0, temperature=0.0,
+                    condition_on_previous_text=False,
+                    initial_prompt="以下是普通话的句子。"
+                )
+                text = to_simplified("".join(s.text for s in segs).strip())
 
-        if not text:
-            self._append_log("(未识别到内容)", DIM)
-            return
+                def show():
+                    if text:
+                        self.recog_lb.configure(text=text, text_color=C_TEXT)
+                        self._hist_add(f"识别: {text}", C_BLUE)
+                        self.ind_labels["麦克风"].configure(text="识别中", text_color=C_BLUE)
+                    else:
+                        self._hist_add("(未识别到内容)", C_DIM)
 
-        # 检查唤醒词
-        wake = check_wake(text)
-        if wake:
-            self._on_wake(wake, text)
-            return
+                self.after(0, show)
+                if not text:
+                    return
 
-        # 若已唤醒 → 执行命令
-        if self.is_woken:
-            self._execute(text)
-        else:
-            self._append_log(f"（未识别为唤醒词，忽略）", DIM)
+                wake = check_wake(text)
+                if wake:
+                    self.is_woken = True
+                    def wake_ui():
+                        self._set_state("🟡", "命令模式", f"唤醒: {wake}", C_YELLOW)
+                        self.ind_labels["模式"].configure(text="命令模式", text_color=C_YELLOW)
+                        self._hist_add(f"🎉 唤醒成功: {wake}", C_GREEN)
+                    self.after(0, wake_ui)
+                    return
 
-    def _to_simplified(self, text):
-        """简繁转换（基础版）"""
-        # 常见繁体 -> 简体映射
-        trad_to_simp = {
-            '開': '开', '關': '关', '語': '语', '語音': '语音',
-            '識': '识', '識別': '识别', '監': '监', '聽': '听',
-            '態': '态', '狀': '状', '態': '态', '復': '复',
-            '製': '制', '製作': '制作', '後': '后', '個': '个',
-            '們': '们', '來': '来', '時': '时', '間': '间',
-            '還': '还', '讓': '让', '這': '这', '裡': '里',
-            '麼': '么', '麼': '么', '們': '们', '從': '从',
-            '實': '实', '現': '现', '試': '试', '驗': '验',
-            '話': '话', '說': '说', '請': '请', '問': '问',
-            '對': '对', '應': '应', '該': '该', '當': '当',
-            '過': '过', '進': '进', '將': '将', '為': '为',
-            '無': '无', '論': '论', '與': '与', '於': '于',
-            '並': '并', '兩': '两', '點': '点', '經': '经',
-            '長': '长', '門': '门', '頁': '页', '關': '关',
-            '標': '标', '題': '题', '執': '执', '行': '行',
-            '嗎': '吗', '呢': '呢', '吧': '吧', '啊': '啊',
-        }
-        for t, s in trad_to_simp.items():
-            text = text.replace(t, s)
-        return text
+                if self.is_woken:
+                    self._do_cmd(text)
+            except Exception as e:
+                self.after(0, lambda: self._hist_add(f"❌ 识别错误: {e}", C_RED))
 
-    def _on_wake(self, phrase, text):
-        self.is_woken = True
-        self._append_log(f"🎉 唤醒！模式: 语音命令", GREEN)
-        self.root.after(0, lambda: self.wake_label.config(
-            text=f"🎙 命令模式", fg=YELLOW))
-        self.root.after(0, lambda: self.state_label.config(
-            text="🟡 唤醒状态", fg=YELLOW))
+        threading.Thread(target=run, daemon=True).start()
 
-    def _execute(self, text):
-        self.is_woken = False  # 每条命令单独确认
-        matched_key = None
-        for key, info in self.cmds.items():
-            if key in text or text in key:
-                matched_key = key
+    def _do_cmd(self, text):
+        self.is_woken = False
+        matched = None
+        for k, v in self.cmds.items():
+            if k in text or text in k:
+                matched = (k, v)
                 break
 
-        if matched_key:
-            info = self.cmds[matched_key]
-            action = info.get("action", "keys")
-            value  = info.get("keys") or info.get("app", "")
+        if matched:
+            k, v = matched
+            action = v.get("action", "keys")
+            val    = v.get("keys") or v.get("app", "")
 
-            self._append_log(f"执行 [{matched_key}]  {action}={value}", GREEN)
+            def ui1():
+                self.ind_labels["麦克风"].configure(text="执行中", text_color=C_YELLOW)
+                self.ind_labels["最后指令"].configure(text=k[:10], text_color=C_YELLOW)
+                self._hist_add(f"⚡ 执行: {k}", C_YELLOW)
+
+            self.after(0, ui1)
 
             ok = False
             if action == "keys":
-                ok = send_keys(value)
+                ok = send_keys(val)
             elif action == "app":
-                ok = activate_app(value)
+                ok = activate_app(val)
 
-            self.root.after(0, lambda _, k=matched_key, o=ok:
-                self.cmd_label.config(text=k, fg=GREEN if o else RED))
+            def ui2():
+                col = C_GREEN if ok else C_RED
+                label = k + (" ✓" if ok else " ✗")
+                self._set_state("🟢", "命令模式", label, col)
+                self.ind_labels["麦克风"].configure(text="命令模式", text_color=C_GREEN)
+                self.ind_labels["最后指令"].configure(text=k[:10], text_color=col)
+                self._hist_add(label, col)
+                if not ok:
+                    self._hist_add(f"⚠ 执行失败", C_RED)
 
-            if not ok:
-                self._append_log("⚠ 执行可能失败", YELLOW)
+            self.after(0, ui2)
         else:
-            self._append_log(f"⚠ 未知指令: {text!r}  → 粘贴文字", YELLOW)
-            # 未匹配：粘贴文字
-            send_keys("^v")
+            def ui3():
+                self._hist_add(f"⚠ 未知指令: {text[:15]!r}", C_YELLOW)
+                send_keys("^v")
+                self._hist_add(f"已粘贴: {text[:20]}...", C_BLUE)
 
-    # ------------------------------------------------------------------ UI 刷新
-    def _ui_tick(self):
-        # 音量条
-        w = self.vol_canvas.winfo_width()
-        if w > 0:
-            vol_pct = min(self.current_rms * 25, 1.0)
-            bw = int(w * vol_pct)
-            self.vol_canvas.coords(self.vol_bar, 0, 0, bw, 32)
-            self.vol_canvas.itemconfigure(self.vol_text,
-                                          text=f"{int(vol_pct*100)}%")
+            self.after(0, ui3)
 
-            # 音量颜色
-            color = GREEN if vol_pct < 0.7 else (YELLOW if vol_pct < 0.9 else RED)
-            self.vol_canvas.itemconfigure(self.vol_bar, fill=color)
+    def _quick(self, label, key):
+        self._hist_add(f"⚡ 快捷: {label}", C_BLUE)
+        if key in ["browser", "cursor"]:
+            activate_app(key)
+        else:
+            send_keys(key)
 
-        # 5分钟无活动自动退出唤醒状态
-        if self.is_woken and (time.time() - self.last_activity) > 300:
+    # ------------------------------------------------------------------ 定时
+    def _tick(self):
+        chunks = []
+        if self.is_listening:
+            while True:
+                try:
+                    chunks.append(self.audio_q.get_nowait())
+                except queue.Empty:
+                    break
+            if chunks:
+                self.wave.push(np.concatenate(chunks))
+
+        if self.is_listening:
+            e = int(time.time() - self.start_time)
+            m, s = divmod(e, 60)
+            self.ind_labels["运行时长"].configure(text=f"{m}:{s:02d}")
+
+        if self.is_woken and (time.time() - self.last_seen) > 300:
             self.is_woken = False
-            self.root.after(0, lambda: self.wake_label.config(
-                text="超时，已退出命令模式", fg=DIM))
-            self.root.after(0, lambda: self.state_label.config(
-                text="🟢 监听中", fg=GREEN))
+            self._set_state("🟢", "监听中", "5分钟超时，已退出命令模式", C_GREEN)
+            self.ind_labels["模式"].configure(text="超时", text_color=C_DIM)
 
-        self.root.after(60, self._ui_tick)
+        self.after(60, self._tick)
 
-    # ------------------------------------------------------------------ 日志 / 识别结果
-    def _append_log(self, msg, color=DIM):
-        ts   = time.strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
-        self.log_lines.append((line, color))
-        if len(self.log_lines) > self.max_log:
-            self.log_lines.pop(0)
-
-        def do():
-            self.log_widget.config(state=tk.NORMAL)
-            self.log_widget.insert(tk.END, line + "\n", color)
-            self.log_widget.see(tk.END)
-            self.log_widget.config(state=tk.DISABLED)
-        try:
-            self.root.after(0, do)
-        except Exception:
-            pass
-
-    def _show_recog(self, text):
-        def do():
-            self.recog_text.config(state=tk.NORMAL)
-            self.recog_text.delete("1.0", tk.END)
-            self.recog_text.insert("1.0", text if text else "(空)")
-            self.recog_text.config(state=tk.DISABLED)
-        try:
-            self.root.after(0, do)
-        except Exception:
-            pass
-
-    def recog_clear(self):
-        def do():
-            self.recog_text.config(state=tk.NORMAL)
-            self.recog_text.delete("1.0", tk.END)
-            self.recog_text.insert("1.0", "等待语音…")
-            self.recog_text.config(state=tk.DISABLED)
-        try:
-            self.root.after(0, do)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------ 退出
     def _on_close(self):
-        self.is_running = False
-        time.sleep(0.2)
-        self.root.destroy()
+        self.is_listening = False
+        self.after(200, self.destroy)
 
-# ============================================================
-# 辅助
-# ============================================================
-def sep(parent, color):
-    f = tk.Frame(parent, height=1, bg=color)
-    return f
-
-# ============================================================
-# 主入口
 # ============================================================
 if __name__ == "__main__":
-    cfg = CONFIG_PATH
-    if not os.path.exists(cfg):
-        print(f"[ERROR] 配置文件不存在: {cfg}")
-        sys.exit(1)
-
-    app = VoicePilotApp(cfg)
+    VoicePilotApp()
