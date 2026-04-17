@@ -2,10 +2,17 @@
 VoicePilot 主界面 — customtkinter 重构版
 """
 import os, sys, json, time, subprocess, threading, queue
+# UNIQUE_MARKER_ACTIVATE_V3_XYZ123
 import numpy as np
+import scipy.signal
 import sounddevice as sd
+import webrtcvad
 from faster_whisper import WhisperModel
 import customtkinter as ctk
+
+# VAD 初始化 (语音活动检测 - 过滤静音和噪音)
+vad = webrtcvad.Vad(1)  # 温和模式，level 1（0-3）
+vad.set_mode(1)
 
 # ============================================================
 # PyInstaller 打包后 __file__ 指向 _internal 临时目录，
@@ -39,6 +46,40 @@ def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def reduce_noise(audio, sr=16000, noise_floor=0.5):
+    """
+    快速降噪 - 时域滤波 + 简单噪声门限。
+    比频谱减法快 10 倍，效果足够用于语音识别。
+    audio: float32 ndarray, shape (n_samples,)
+    sr: 采样率，默认 16000
+    noise_floor: 降噪强度，0-1 之间，越大降得越多
+    """
+    # ---- 噪声估计：取前 200ms 静音区的 RMS ----
+    noise_window = int(sr * 0.2)  # 200ms
+    noise_samples = audio[:noise_window]
+    noise_rms = np.sqrt(np.mean(noise_samples ** 2))
+
+    # 如果没有明显噪声（< 0.01 RMS），跳过
+    if noise_rms < 0.01:
+        return audio
+
+    # ---- 简单噪声门限 + 软衰减 ----
+    # 阈值 = 噪声 RMS × 系数
+    threshold = noise_rms * (1.5 - noise_floor)
+    mask = np.where(np.abs(audio) > threshold,
+                    (np.abs(audio) - threshold) / (np.abs(audio) + 1e-8),
+                    0)
+    audio = audio * mask
+
+    # 轻微高通滤波（去掉低频 rumble，500Hz 以下）
+    b, a = scipy.signal.butter(4, 500 / (sr / 2), btype='high')
+    audio = scipy.signal.filtfilt(b, a, audio)
+
+    # 防止削波
+    audio = np.clip(audio, -1.0, 1.0)
+    return audio
+
+
 def check_wake(text):
     tn = text.lower().replace(" ", "").replace("\u3000", "")
     for p in WAKE_PHRASES:
@@ -60,16 +101,103 @@ def send_keys(key_str):
     except Exception:
         return False
 
-def activate_app(app_name):
-    script = os.path.join(SKILL_DIR, "window.ps1")
+def _debug_log(msg):
     try:
-        r = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
-             "-Action", "activate", "-app", app_name],
-            capture_output=True, timeout=10,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        return r.returncode == 0
+        log_path = os.path.join(os.path.dirname(CONFIG_PATH), "debug.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            import datetime
+            f.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+def activate_app(app_name):
+    """激活应用窗口：先最小化自己，激活目标（未运行则自动启动）"""
+    _debug_log(f"activate_app: {app_name}")
+    import ctypes
+    user32 = ctypes.windll.user32
+    SW_MIN = 6
+    my_hwnd = user32.GetForegroundWindow()
+    if my_hwnd:
+        user32.ShowWindow(my_hwnd, SW_MIN)
+        time.sleep(0.2)
+    script = os.path.join(SKILL_DIR, "window.ps1")
+
+    def do_ps(action, extra_args=None):
+        args = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
+                "-Action", action]
+        if extra_args:
+            args += extra_args
+        r = subprocess.run(args, capture_output=True, timeout=15,
+                          creationflags=subprocess.CREATE_NO_WINDOW)
+        return r
+
+    # 优先尝试激活已运行的窗口（用窗口标题）
+    r = do_ps("activate", ["-AppTitle", app_name])
+    stdout = r.stdout.decode("utf-8", "replace").strip()
+    _debug_log(f"  activate stdout={stdout[:100]}")
+    try:
+        result = json.loads(stdout)
+        if result.get("success"):
+            return True
+    except Exception:
+        pass
+
+    # 未运行 → 自动启动
+    _debug_log(f"  window not found, trying launch for: {app_name}")
+    r2 = do_ps("launch", ["-ProcessName", app_name])
+    stdout2 = r2.stdout.decode("utf-8", "replace").strip()
+    _debug_log(f"  launch stdout={stdout2[:100]}")
+    return r2.returncode == 0
+
+
+def goto_chat(target_title, tab_count=5):
+    """激活窗口 + Tab 导航到聊天输入框"""
+    _debug_log(f"goto_chat: {target_title}")
+    import ctypes
+    user32 = ctypes.windll.user32
+    SW_MIN = 6
+    my_hwnd = user32.GetForegroundWindow()
+    if my_hwnd:
+        user32.ShowWindow(my_hwnd, SW_MIN)
+        time.sleep(0.2)
+    script = os.path.join(SKILL_DIR, "window.ps1")
+    tabs = "".join(["{TAB}"] * tab_count)
+    args = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
+            "-Action", "goto-chat",
+            "-AppTitle", target_title]
+    r = subprocess.run(args, capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    stdout = r.stdout.decode("utf-8", "replace").strip()
+    _debug_log(f"  goto_chat stdout={stdout[:200]}")
+    try:
+        result = json.loads(stdout)
+        return result.get("success", False)
+    except Exception:
+        return False
+
+
+def goto_chat_paste(target_title, text, tab_count=5):
+    """激活窗口 + Tab 定位到聊天输入框 + 粘贴文本"""
+    _debug_log(f"goto_chat_paste: {target_title}, text_len={len(text)}")
+    import ctypes
+    user32 = ctypes.windll.user32
+    SW_MIN = 6
+    my_hwnd = user32.GetForegroundWindow()
+    if my_hwnd:
+        user32.ShowWindow(my_hwnd, SW_MIN)
+        time.sleep(0.2)
+    script = os.path.join(SKILL_DIR, "window.ps1")
+    args = ["powershell", "-ExecutionPolicy", "Bypass", "-File", script,
+            "-Action", "goto-chat-paste",
+            "-AppTitle", target_title,
+            "-Text", text]
+    r = subprocess.run(args, capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    stdout = r.stdout.decode("utf-8", "replace").strip()
+    _debug_log(f"  goto_chat_paste stdout={stdout[:200]}")
+    try:
+        result = json.loads(stdout)
+        return result.get("success", False)
     except Exception:
         return False
 
@@ -301,19 +429,33 @@ class VoicePilotApp(ctk.CTk):
              fg="#21262d", hover="#30363d",
              color=C_TEXT).pack(side="right", fill="y")
 
-        # 快捷按钮
+        # 快捷按钮（第一行：通用快捷键）
         qc = cframe(left)
-        qc.pack(fill="x", pady=(0, 0))
+        qc.pack(fill="x")
         clabel(qc, "⚡  快捷指令（点击直接执行）",
                size=12, color=C_DIM, anchor="w", padx=16, pady=(12, 0)).pack(fill="x")
         qf = ctk.CTkFrame(qc, fg_color="transparent")
-        qf.pack(fill="x", padx=12, pady=(0, 12))
+        qf.pack(fill="x", padx=12, pady=(4, 0))
         for i, (lb, key) in enumerate([
             ("新标签", "^t"), ("关标签", "^w"), ("保存", "^s"),
             ("撤销", "^z"), ("复制", "^c"), ("粘贴", "^v"),
-            ("浏览器", "browser"), ("Cursor", "cursor"),
         ]):
-            cbtn(qf, lb, lambda k=key, l=lb: self._quick(l, k),
+            cbtn(qf, lb, (lambda l=lb, k=key: self._quick(l, k)),
+                 width=70, height=34
+                 ).grid(row=0, column=i, padx=3, pady=4)
+
+        # 快捷按钮（第二行：QClaw 操作）
+        qf2 = ctk.CTkFrame(qc, fg_color="transparent")
+        qf2.pack(fill="x", padx=12, pady=(0, 12))
+        for i, (lb, key) in enumerate([
+            ("切QClaw", "app:QClaw"),
+            ("去聊天",  "goto-chat:QClaw"),
+            ("粘贴发送","paste+enter"),
+            ("发送",    "^v{Enter}"),
+            ("新标签",  "^t"),
+            ("关标签",  "^w"),
+        ]):
+            cbtn(qf2, lb, (lambda l=lb, k=key: self._quick(l, k)),
                  width=70, height=34
                  ).grid(row=0, column=i, padx=3, pady=4)
 
@@ -572,13 +714,31 @@ class VoicePilotApp(ctk.CTk):
     def _transcribe(self, audio):
         def run():
             try:
+                # 自动增益 - 弱麦克风专用（目标 RMS > 0.1）
+                audio = audio.astype(np.float32)
+                rms = np.sqrt(np.mean(audio ** 2))
+                if rms > 0:
+                    target_rms = 0.2
+                    gain = min(target_rms / rms, 20.0)  # 最多放大 20 倍
+                    if gain > 1.2:  # 原来太弱，需要放大
+                        audio = np.clip(audio * gain, -1.0, 1.0)
+                # 频谱减法降噪（嘈杂环境）
+                sr = self.mic_cfg.get("sample_rate", 16000)
+                audio = reduce_noise(audio, sr=sr)
+                # 归一化到 0.95
+
+                # 跳过 VAD 过滤（麦克风音量弱，VAD 会误杀语音）
+                # 仅用最小长度过滤（100ms = 1600 samples）
+                if len(audio) < 1600:
+                    return
+
                 segs, _ = self.model.transcribe(
                     audio, language="zh",
                     task="transcribe",
                     beam_size=5, best_of=5,
                     patience=1.0, temperature=0.0,
                     condition_on_previous_text=False,
-                    initial_prompt="以下是普通话的句子。"
+                    initial_prompt="以下是普通话的语音指令，包括应用名称、窗口操作和快捷键。"
                 )
                 text = to_simplified("".join(s.text for s in segs).strip())
 
@@ -639,6 +799,12 @@ class VoicePilotApp(ctk.CTk):
                 ok = send_keys(val)
             elif action == "app":
                 ok = activate_app(val)
+            elif action == "goto-chat":
+                tab_count = v.get("tab_count", 5)
+                ok = goto_chat(val, tab_count)
+            elif action == "goto-chat-paste":
+                tab_count = v.get("tab_count", 5)
+                ok = goto_chat_paste(val, text, tab_count)
 
             def ui2():
                 col = C_GREEN if ok else C_RED
@@ -652,17 +818,23 @@ class VoicePilotApp(ctk.CTk):
 
             self.after(0, ui2)
         else:
+            # 识别了文字但没有命中内置指令 → 自动粘贴到 QClaw 聊天框
             def ui3():
-                self._hist_add(f"⚠ 未知指令: {text[:15]!r}", C_YELLOW)
-                send_keys("^v")
-                self._hist_add(f"已粘贴: {text[:20]}...", C_BLUE)
-
+                self._hist_add(f"💬 粘贴到聊天: {text[:20]}...", C_BLUE)
+                goto_chat_paste("QClaw", text, tab_count=5)
             self.after(0, ui3)
 
     def _quick(self, label, key):
         self._hist_add(f"⚡ 快捷: {label}", C_BLUE)
-        if key in ["browser", "cursor"]:
-            activate_app(key)
+        if key.startswith("app:"):
+            activate_app(key[4:])
+        elif key.startswith("goto-chat:"):
+            goto_chat(key.split(":", 1)[1], tab_count=5)
+        elif key == "paste+enter":
+            # 把当前剪贴板内容粘贴并发送
+            send_keys("^v{Enter}")
+        elif key == "^v{Enter}":
+            send_keys("^v{Enter}")
         else:
             send_keys(key)
 
